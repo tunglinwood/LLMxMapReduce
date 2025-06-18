@@ -19,13 +19,37 @@ class OpenAIRequest:
         )
         self.model = model
 
+    def _validate_messages_length(self, messages):
+        """Validate and truncate messages to fit within model's context length"""
+        max_length = 140000 * 4  # Approximate 4 chars per token
+        total_length = 0
+        valid_messages = []
+        
+        for msg in messages:
+            content = msg.content if hasattr(msg, 'content') else msg['content']
+            if total_length + len(content) > max_length:
+                remaining = max_length - total_length
+                if remaining > 1000:  # Only truncate if we can keep meaningful content
+                    if hasattr(msg, 'content'):
+                        msg.content = content[:remaining] + '... [truncated]'
+                    else:
+                        msg['content'] = content[:remaining] + '... [truncated]'
+                    valid_messages.append(msg)
+                break
+            valid_messages.append(msg)
+            total_length += len(content)
+            
+        logger.debug(f"Validated messages length: {total_length} chars")
+        return valid_messages
+
     @retry(
         wait=wait_random_exponential(multiplier=2, max=60),
         stop=stop_after_attempt(100),
-        retry=retry_if_exception_type((RateLimitError, InternalServerError, APIError)) # 如果不是这几个错就不retry了
+        retry=retry_if_exception_type((RateLimitError, InternalServerError, APIError))
         )
     def completion(self, messages, **kwargs):
         try:
+            messages = self._validate_messages_length(messages)
             response = self.client.chat.completions.create(
                 model=self.model, messages=messages, **kwargs
             )

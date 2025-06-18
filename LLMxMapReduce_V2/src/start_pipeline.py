@@ -74,15 +74,20 @@ def start_pipeline(args):
     return pipeline
 
 
-def main():
+async def main():
     args = parse_args()
+    
+    # Show help and exit if --help flag is present
+    if hasattr(args, 'help') and args.help:
+        return
+    
     logger.info(f"Start pipeline with args: {args}")
     logger.info(f"Current language: {os.environ.get('PROMPT_LANGUAGE', 'en')}")
     if args.topic:
         logger.info("set --topic, start to auto retrieve pages from Internet")
         # get retrieve urls
         logger.info("---------Start to generate queries.-------------")
-        retriever = LLM_search(model='gemini-2.0-flash-thinking-exp-01-21', infer_type="OpenAI", engine='google', each_query_result=10)
+        retriever = LLM_search(model='deepseek-v3-0324', infer_type="OpenAI", engine='google', each_query_result=10)
         queries = retriever.get_queries(topic=args.topic, description=args.description)
         logger.info("---------Start to search pages.-------------")
         url_list = retriever.batch_web_search(queries=queries, topic=args.topic, top_n=int(args.top_n * 1.2))
@@ -92,15 +97,25 @@ def main():
         if not os.path.exists(os.path.dirname(crawl_output_path)):
             os.mkdir(os.path.dirname(crawl_output_path))
 
-        crawler = AsyncCrawler(model="gemini-2.0-flash-thinking-exp-01-21", infer_type="OpenAI")
-        asyncio.run(
-            crawler.run(
-                topic=args.topic,
-                url_list=url_list,
-                crawl_output_file_path=crawl_output_path,
-                top_n=args.top_n
-            )
-        )
+        crawler = AsyncCrawler(model="deepseek-v3-0324", infer_type="OpenAI")
+        max_retries = 3
+        retry_delay = 1  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                await crawler.run(
+                    topic=args.topic,
+                    url_list=url_list,
+                    crawl_output_file_path=crawl_output_path,
+                    top_n=args.top_n
+                )
+                break  # Success - exit retry loop
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    logger.error(f"Final attempt failed after {max_retries} retries: {str(e)}")
+                    raise  # Re-raise if last attempt failed
+                logger.warning(f"Attempt {attempt + 1} failed, retrying in {retry_delay * (attempt + 1)} seconds... Error: {str(e)}")
+                await asyncio.sleep(retry_delay * (attempt + 1))  # Exponential backoff
         print("---------References retrieve end.-------------")
         pipeline = start_pipeline(args)
         pipeline.put(crawl_output_path)
@@ -116,4 +131,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

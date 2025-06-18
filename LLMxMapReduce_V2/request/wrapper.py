@@ -14,9 +14,10 @@ class RequestWrapper:
     _calls_count = 0 # 用来统计api的调用次数
     _token_usage_history = [] # 用来统计每次调用时使用的token数
 
-    def __init__(self, model="gemini-2.0-flash-thinking-exp-1219", infer_type="OpenAI", connection=20, port=None):
+    def __init__(self, model="gemini-2.0-flash-thinking-exp-1219", infer_type="OpenAI", connection=20, port=None, max_context_length=163840):
         if not model:
             model = "gemini-2.0-flash-thinking-exp-1219"
+        self.max_context_length = max_context_length
         
         self.request_pool = None
         self.model = model

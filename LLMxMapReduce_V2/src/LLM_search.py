@@ -73,11 +73,14 @@ class LLM_search:
         self.bing_subscription_key = os.getenv('BING_SEARCH_V7_SUBSCRIPTION_KEY')
         self.bing_endpoint = os.getenv('BING_SEARCH_V7_ENDPOINT', "https://api.bing.microsoft.com/v7.0/search")
         self.serpapi_key = os.getenv("SERP_API_KEY")
+        self.use_searxng = os.getenv("USE_SEARXNG")
         
-        if self.serpapi_key is not None:
-            logger.info("Using SERPAPI for web search.")
+        if  self.use_searxng == "true":
+            logger.info("Using local SearXNG instance for web search.")
         elif self.bing_subscription_key is not None:
             logger.info("Using Bing Search API for web search.")
+        elif self.serpapi_key is not None:
+            logger.info("Using SERPAPI for web search.") 
         else:
             raise ValueError("No valid search engine key provided, please check your environment variables, SERPAPI_KEY or BING_SEARCH_V7_SUBSCRIPTION_KEY.")
 
@@ -92,6 +95,16 @@ class LLM_search:
 
         return prompt
 
+    def _truncate_messages(self, messages: list) -> list:
+        """Preserve message structure and add truncation markers if needed"""
+        truncated_messages = []
+        for msg in messages:
+            if len(msg['content']) > 10000:  # Only mark extremely long messages
+                msg['content'] = msg['content'][:10000] + '... [pre-truncated]'
+            truncated_messages.append(msg)
+        logger.debug(f"Processed {len(messages)} messages for structure preservation")
+        return truncated_messages
+
     @retry(
         stop=stop_after_attempt(5),
         retry=retry_if_exception_type(QueryParseError),
@@ -101,7 +114,7 @@ class LLM_search:
         """Get response from LLM and parse queries
 
         Args:
-            message: List of chat messages
+            message: List of chat messages or string
 
         Returns:
             list: Parsed query list
@@ -109,6 +122,11 @@ class LLM_search:
         Raises:
             QueryParseError: If unable to parse queries from response
         """
+        if isinstance(message, list):
+            message = self._truncate_messages(message)
+        elif isinstance(message, str) and len(message) > 6000:
+            message = message[:6000] + '... [truncated]'
+            
         response = self.request_pool.completion(message)
         reg = r"```markdown\n([\s\S]*?)```"
         match = re.search(reg, response)
@@ -154,13 +172,41 @@ class LLM_search:
         self,
         query: str,
     ):
-        if self.serpapi_key is not None:
-            return self._serpapi_web_search(query)
+        # return self._searxng_web_search(query)
+        if self.use_searxng == "true":
+            return self._searxng_web_search(query)
         elif self.bing_subscription_key is not None:
             return self._bing_web_search(query)
+        elif self.serpapi_key is not None:
+            return self._serpapi_web_search(query)
         else:
             raise ValueError("No valid search engine key provided, please check your environment variables, SERPAPI_KEY or BING_SEARCH_V7_SUBSCRIPTION_KEY.")
+            
  
+    def _searxng_web_search(self, query: str):
+        """Perform web search using local SearXNG instance"""
+        params = {
+            'q': query.lstrip('"').rstrip('"'),
+            'format': 'json'
+        }
+        try:
+            response = requests.get("http://174.1.21.1:8082/search", params=params)
+            response.raise_for_status()
+            results = response.json()
+            
+            web_snippets = {}
+            for idx, result in enumerate(results.get('results', [])):
+                web_snippets[idx] = {
+                    'title': result.get('title', ''),
+                    'url': result.get('url', ''),
+                    'snippet': result.get('content', ''),
+                    'source': result.get('engine', '')
+                }
+            return web_snippets
+        except Exception as e:
+            logger.error(f"SearXNG search error: {e}")
+            raise
+
     def _bing_web_search(
         self,
         query: str,
@@ -443,3 +489,9 @@ class LLM_search:
 
         logger.info(f"Returning top {len(filtered_urls)} most relevant URLs.")
         return filtered_urls
+
+
+if __name__ == "__main__":
+
+    web_search = LLM_search.web_search(query="LLM search engine")
+    print(web_search)

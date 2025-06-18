@@ -2,11 +2,12 @@ import json
 import asyncio
 import nest_asyncio
 import time
-from crawl4ai import AsyncWebCrawler, CacheMode, CrawlerRunConfig
+import os
 import re
 import sys
-
+from crawl4ai import AsyncWebCrawler, CacheMode, CrawlerRunConfig
 sys.path.append("survey_writer")
+# Direct import from request.wrapper using exact path
 from request import RequestWrapper
 from typing import List
 from prompts import PAGE_REFINE_PROMPT, SIMILARITY_PROMPT
@@ -326,9 +327,41 @@ class AsyncCrawler:
 
         async with AsyncWebCrawler() as crawler:
             result = await crawler.arun(url=url, config=crawler_run_config)
-            raw_markdown = result.markdown_v2.raw_markdown
-            logger.info(f"Content length={len(raw_markdown)} for URL={url}")
-            return raw_markdown
+            if result and hasattr(result, 'markdown_v2') and result.markdown_v2:
+                raw_markdown = result.markdown_v2.raw_markdown
+                logger.info(f"Content length={len(raw_markdown)} for URL={url}")
+                
+                # Apply smart truncation if needed
+                max_length = int(os.getenv('LLM_MODEL_MAX_LENGTH', '150000'))
+                if len(raw_markdown) > max_length:
+                    logger.info(f"Content length={len(raw_markdown)} exceeds max_length={max_length}, truncating...")
+                    sections = re.split(r'(^#+.+$)', raw_markdown, flags=re.MULTILINE)
+                    truncated = []
+                    total_length = 0
+                    
+                    for section in sections:
+                        if not section.strip():
+                            continue
+                            
+                        if section.startswith('#'):
+                            truncated.append(section)
+                            continue
+                            
+                        paragraphs = re.split(r'\n\n+', section)
+                        for para in paragraphs[:5]:  # Keep first 5 paragraphs per section
+                            if total_length + len(para) > max_length:
+                                break
+                            truncated.append(para)
+                            total_length += len(para)
+                            
+                        if total_length >= max_length:
+                            break
+                            
+                    raw_markdown = '\n\n'.join(truncated) + f"\n\n... [truncated from {len(raw_markdown)} chars to {max_length}]"
+                    logger.info(f"Truncated content to {len(raw_markdown)} chars for URL={url}")
+                    
+                return raw_markdown
+            return f"Error: Invalid crawl result for URL={url}"
 
     def _process_results(
         self,
